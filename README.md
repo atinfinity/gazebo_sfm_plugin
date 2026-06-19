@@ -5,7 +5,6 @@ The persons are affected by the obstacles and other persons using the [Social Fo
 
 > [!NOTE]
 > **Tested in ROS 2 Jazzy and Gazebo Harmonic (gz-sim 8).**
-> For the legacy ROS 2 Galactic / Gazebo Classic 11 version, see the `galactic` branch history (commit `4e84fed` and earlier).
 
 ![](media/images/gazebo_sfm_plugin%20cafe_ros2.png)
 
