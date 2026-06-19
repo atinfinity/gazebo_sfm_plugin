@@ -1,20 +1,17 @@
 # gazebo_sfm_plugin
-A plugin for simulation of human pedestrians in ROS 2 and Gazebo.
 
-**Tested in ROS 2 Jazzy and Gazebo Harmonic (gz-sim 8).**
-
-> For the legacy ROS 2 Galactic / Gazebo Classic 11 version, see the `galactic` branch history (commit `4e84fed` and earlier).
-
+A plugin for simulation of human pedestrians in ROS 2 and Gazebo Ignition.  
 The persons are affected by the obstacles and other persons using the [Social Force Model](https://github.com/robotics-upo/lightsfm)
 
+> [!NOTE]
+> **Tested in ROS 2 Jazzy and Gazebo Harmonic (gz-sim 8).**
+> For the legacy ROS 2 Galactic / Gazebo Classic 11 version, see the `galactic` branch history (commit `4e84fed` and earlier).
 
 ![](https://github.com/robotics-upo/gazebo_sfm_plugin/blob/master/media/images/capture3.jpg)
 
-
 ## Plugin configuration
 
-The plugin can be applied to each Gazebo Actor indicated in the Gazebo world file.
-
+The plugin can be applied to each Gazebo Actor indicated in the Gazebo world file.  
 An example snippet is shown next:
 
 ```html
@@ -76,7 +73,6 @@ The parameters that can be configured for each pedestrian are:
 ### Trajectory params
 
 * ```<trajectory>```. The list of waypoints that the actor must reach must be indicated here. 
-
 	- ```<waypoint>```. Each waypoint must be indicated by its coordinates X, Y, Z in the world frame.
 	- ```<cyclic>```. If true, the actor will start the waypoint sequence when the last waypoint is reached.
 
@@ -84,30 +80,35 @@ The parameters that can be configured for each pedestrian are:
 
 * **ROS 2 Jazzy** and **Gazebo Harmonic**. On Jazzy, Gazebo Harmonic is provided
   through the ROS vendor packages — installing `ros-jazzy-ros-gz` pulls them in:
-  ```sh
+  ```bash
   sudo apt install ros-jazzy-ros-gz
   ```
 * The **Social Force Model** library, lightsfm (standalone, header-only):
   https://github.com/robotics-upo/lightsfm — install it under `/usr/local`.
+  ```bash
+  git clone https://github.com/robotics-upo/lightsfm.git
+  cd lightsfm
+  make
+  sudo make install
+  sudo ldconfig
+  ```
 
 ## Compilation
 
 This is a ROS 2 package, so place it inside a ROS 2 workspace and build it with
 colcon:
-```sh
-colcon build --packages-select gazebo_sfm_plugin
+```bash
+colcon build --symlink-install --packages-select gazebo_sfm_plugin -cmake-args -DCMAKE_BUILD_TYPE=Release
 ```
 
 ## Example
 
 An example Gazebo world can be launched through:
-```sh
+```bash
 ros2 launch gazebo_sfm_plugin cafe_ros2.launch.py
 ```
 
-The example world (`worlds/cafe3.sdf`) pulls the `Cafe`, `Cafe table` and
-`Ground Plane` models from [Gazebo Fuel](https://app.gazebosim.org/fuel) on the
-first run, so an internet connection is required the first time.
+The example world (`worlds/cafe3.sdf`) pulls the `Cafe`, `Cafe table` and `Ground Plane` models from [Gazebo Fuel](https://app.gazebosim.org/fuel) on the first run, so an internet connection is required the first time.
 
 ### Notes for the Gazebo Harmonic port
 
@@ -132,4 +133,3 @@ first run, so an internet connection is required the first time.
   bundled under `media/models/` (installed onto `GZ_SIM_RESOURCE_PATH`) so the
   scene renders with textures instead of emitting "Could not resolve file"
   warnings. They are resolved by bare filename through the resource path.
-

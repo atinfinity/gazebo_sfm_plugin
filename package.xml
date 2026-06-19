@@ -5,13 +5,14 @@
   <version>2.0.0</version>
   <description>Social Force Model pedestrian plugin for Gazebo (Harmonic / gz-sim 8) on ROS 2 Jazzy</description>
 
-  <maintainer email="noeperez@upo.es">Noé Pérez-Higueras</maintainer>
+  <maintainer email="dandelion1124@gmail.com">atinfinity</maintainer>
 
   <license>BSD</license>
 
-  <url type="repository">https://github.com/robotics-upo/gazebo_sfm_plugin</url>
+  <url type="repository">https://github.com/atinfinity/gazebo_sfm_plugin</url>
 
   <author>Noé Pérez</author>
+  <author email="dandelion1124@gmail.com">atinfinity</author>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
 
