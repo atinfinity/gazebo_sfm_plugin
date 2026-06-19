@@ -7,14 +7,14 @@ The persons are affected by the obstacles and other persons using the [Social Fo
 > **Tested in ROS 2 Jazzy and Gazebo Harmonic (gz-sim 8).**
 > For the legacy ROS 2 Galactic / Gazebo Classic 11 version, see the `galactic` branch history (commit `4e84fed` and earlier).
 
-![](https://github.com/robotics-upo/gazebo_sfm_plugin/blob/master/media/images/capture3.jpg)
+![](media/images/gazebo_sfm_plugin%20cafe_ros2.png)
 
 ## Plugin configuration
 
 The plugin can be applied to each Gazebo Actor indicated in the Gazebo world file.  
 An example snippet is shown next:
 
-```html
+```xml
 <actor name="actor1">
 	<pose>-1 2 1.25 0 0 0</pose>
 	<skin>
@@ -52,6 +52,7 @@ An example snippet is shown next:
 	</plugin>
 </actor>
 ```
+
 The parameters that can be configured for each pedestrian are:
 
 ### General params
