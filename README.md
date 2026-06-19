@@ -1,7 +1,9 @@
 # gazebo_sfm_plugin
-A plugin for simulation of human pedestrians in ROS2 and Gazebo.
+A plugin for simulation of human pedestrians in ROS 2 and Gazebo.
 
-**Tested in ROS2 Galactic and Gazebo 11** 
+**Tested in ROS 2 Jazzy and Gazebo Harmonic (gz-sim 8).**
+
+> For the legacy ROS 2 Galactic / Gazebo Classic 11 version, see the `galactic` branch history (commit `4e84fed` and earlier).
 
 The persons are affected by the obstacles and other persons using the [Social Force Model](https://github.com/robotics-upo/lightsfm)
 
@@ -28,10 +30,11 @@ An example snippet is shown next:
 		<interpolate_x>true</interpolate_x>
 	</animation>
 	<!-- plugin definition -->
-	<plugin name="actor1_plugin" filename="libPedestrianSFMPlugin.so">
+	<plugin name="gazebo_sfm_plugin::PedestrianSFMPlugin" filename="PedestrianSFMPlugin">
 		<velocity>0.9</velocity>
 		<radius>0.4</radius>
 		<animation_factor>5.1</animation_factor>
+		<animation_name>walking</animation_name>
 		<people_distance>6.0</people_distance>
 		<!-- weights -->
 		<goal_weight>2.0</goal_weight>
@@ -60,6 +63,7 @@ The parameters that can be configured for each pedestrian are:
 *  ```<radius>```. Approximate radius of the pedestrian's body (m).
 *  ```<animation_factor>```. Factor employed to coordinate the animation with the walking velocity.
 * ```<people_distance>```.  Maximum detection distance of the surrounding pedestrians.
+* ```<animation_name>```.  Name of the actor `<animation>` to play (defaults to `walking`).
 
 ### SFM Weights
 
@@ -78,11 +82,18 @@ The parameters that can be configured for each pedestrian are:
 
 ## Dependencies
 
-* Yo must download and install the Social Force Model library, lightsfm https://github.com/robotics-upo/lightsfm
+* **ROS 2 Jazzy** and **Gazebo Harmonic**. On Jazzy, Gazebo Harmonic is provided
+  through the ROS vendor packages — installing `ros-jazzy-ros-gz` pulls them in:
+  ```sh
+  sudo apt install ros-jazzy-ros-gz
+  ```
+* The **Social Force Model** library, lightsfm (standalone, header-only):
+  https://github.com/robotics-upo/lightsfm — install it under `/usr/local`.
 
 ## Compilation
 
-* This is a ROS2 package so it must be placed inside a ROS2 workspace and compiled through the regular colcon compiler. 
+This is a ROS 2 package, so place it inside a ROS 2 workspace and build it with
+colcon:
 ```sh
 colcon build --packages-select gazebo_sfm_plugin
 ```
@@ -93,4 +104,32 @@ An example Gazebo world can be launched through:
 ```sh
 ros2 launch gazebo_sfm_plugin cafe_ros2.launch.py
 ```
+
+The example world (`worlds/cafe3.sdf`) pulls the `Cafe`, `Cafe table` and
+`Ground Plane` models from [Gazebo Fuel](https://app.gazebosim.org/fuel) on the
+first run, so an internet connection is required the first time.
+
+### Notes for the Gazebo Harmonic port
+
+* The plugin is now a `gz::sim::System` (`ISystemConfigure` + `ISystemPreUpdate`)
+  instead of a Gazebo Classic `ModelPlugin`.
+* Each actor is driven kinematically through its `TrajectoryPose` and
+  `AnimationTime` components, so its base `Pose` is left at the origin.
+* Obstacle avoidance uses the world-frame `AxisAlignedBox` component, which the
+  physics system populates for the relevant models.
+* When embedding the plugin in your own world, reference it as
+  `filename="PedestrianSFMPlugin"` with
+  `name="gazebo_sfm_plugin::PedestrianSFMPlugin"`, and make sure the plugin
+  library directory is on `GZ_SIM_SYSTEM_PLUGIN_PATH` (the provided launch file
+  sets it).
+* Actor `<skin>`/`<animation>` `<filename>` paths are resolved **relative to the
+  world file** (not via `GZ_SIM_RESOURCE_PATH`). In `cafe3.sdf` the meshes are
+  therefore referenced as `../models/walk.dae`, since the installed layout places
+  the world in `share/gazebo_sfm_plugin/worlds/` and the meshes in
+  `share/gazebo_sfm_plugin/models/`.
+* The texture images referenced by the Fuel cafe / cafe-table models
+  (`Maple.jpg`, `Wood_Floor_Dark.jpg` and the cafe's `__auto_*.jpg` set) are
+  bundled under `media/models/` (installed onto `GZ_SIM_RESOURCE_PATH`) so the
+  scene renders with textures instead of emitting "Could not resolve file"
+  warnings. They are resolved by bare filename through the resource path.
 

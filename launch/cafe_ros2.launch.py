@@ -1,122 +1,50 @@
-from os import environ
-from os import pathsep
-from scripts import GazeboRosPaths
+#!/usr/bin/env python3
+# Launch the cafe SFM-pedestrians world in Gazebo Harmonic via ros_gz_sim.
 
+import os
+
+from ament_index_python.packages import (
+    get_package_prefix,
+    get_package_share_directory,
+)
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, SetEnvironmentVariable, DeclareLaunchArgument, ExecuteProcess, Shutdown
+from launch.actions import (
+    AppendEnvironmentVariable,
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import PathJoinSubstitution, TextSubstitution, LaunchConfiguration, PythonExpression, EnvironmentVariable
-from launch_ros.actions import Node
-from launch_ros.substitutions import FindPackageShare
+from launch.substitutions import LaunchConfiguration
+
 
 def generate_launch_description():
+    pkg_share = get_package_share_directory('gazebo_sfm_plugin')
+    pkg_prefix = get_package_prefix('gazebo_sfm_plugin')
+    ros_gz_sim_share = get_package_share_directory('ros_gz_sim')
 
-    my_gazebo_models = PathJoinSubstitution([
-        FindPackageShare('gazebo_sfm_plugin'),
-        'models',
-    ])
+    # Bundled actor/animation meshes (walk*.dae, stand.dae, ...).
+    models_path = os.path.join(pkg_share, 'models')
+    # Installed plugin shared library directory.
+    plugin_path = os.path.join(pkg_prefix, 'lib')
 
+    default_world = os.path.join(pkg_share, 'worlds', 'cafe3.sdf')
 
-    # src_gazebo_cmd = [
-    #     'source ',
-    #     '/usr/share/gazebo/setup.sh'
-    # ]
-    # ExecuteProcess(
-    #     cmd=src_gazebo_cmd,
-    #     #output='screen',
-    #     shell=True
-    # )
-    # print('gazebo_source:', src_gazebo_cmd)
-
-    
-    model, plugin, media = GazeboRosPaths.get_paths()
-    #print('model:', model)
-
-    if 'GAZEBO_MODEL_PATH' in environ:
-        model += pathsep+environ['GAZEBO_MODEL_PATH']
-    if 'GAZEBO_PLUGIN_PATH' in environ:
-        plugin += pathsep+environ['GAZEBO_PLUGIN_PATH']
-    if 'GAZEBO_RESOURCE_PATH' in environ:
-        media += pathsep+environ['GAZEBO_RESOURCE_PATH']
-
-    env = {
-        'GAZEBO_MODEL_PATH': model,
-        'GAZEBO_PLUGIN_PATH': plugin,
-        'GAZEBO_RESOURCE_PATH': media
-    }
-    print('env:', env)
-
-    
-    world_path = PathJoinSubstitution([
-        FindPackageShare('gazebo_sfm_plugin'),
-        'worlds',
-        'cafe3.world'
-    ])
-
-    gzserver_cmd = [
-        'gzserver ',
-        #'-u ', #to start paused
-        # Pass through arguments to gzserver
-        LaunchConfiguration('world'), world_path, 
-        _boolean_command('verbose'), '',
-    ]
-
-    gzclient_cmd = [
-        'gzclient',
-        _boolean_command('verbose'), ' ',
-    ]
-
-    
-
+    gz_sim = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(ros_gz_sim_share, 'launch', 'gz_sim.launch.py')),
+        launch_arguments={
+            'gz_args': [LaunchConfiguration('world'), ' -r -v 3'],
+        }.items(),
+    )
 
     return LaunchDescription([
-
-        SetEnvironmentVariable(
-            name='GAZEBO_MODEL_PATH', 
-            value=[EnvironmentVariable('GAZEBO_MODEL_PATH'), my_gazebo_models]
-        ),
-        SetEnvironmentVariable(
-            name='GAZEBO_RESOURCE_PATH', 
-            value=[EnvironmentVariable('GAZEBO_RESOURCE_PATH'), my_gazebo_models]
-        ),
-        SetEnvironmentVariable(
-            name='GAZEBO_PLUGIN_PATH', 
-            value=[EnvironmentVariable('GAZEBO_PLUGIN_PATH'), plugin]
-        ),
-
         DeclareLaunchArgument(
-            'world', default_value='',
-                     #'/home/kenny/ros2_ws/src/human_nav_gazebo_plugin/worlds/cafe2.world',
-            description='Specify world file name'
+            'world',
+            default_value=default_world,
+            description='Absolute path to the world file to load.',
         ),
-        DeclareLaunchArgument(
-            'verbose', default_value='true',
-            description='Set "true" to increase messages written to terminal.'
-        ),
-
-
-        ExecuteProcess(
-            cmd=gzserver_cmd,
-            output='screen',
-            #additional_env=env,
-            shell=True,
-            on_exit=Shutdown(),
-            #condition=IfCondition(LaunchConfiguration('server_required')),
-        ),
-
-        ExecuteProcess(
-            cmd=gzclient_cmd,
-            output='screen',
-            #additional_env=env,
-            shell=True,
-            on_exit=Shutdown(),
-            #condition=IfCondition(LaunchConfiguration('server_required')),
-        ),
+        # Let Gazebo find the bundled meshes and the plugin library.
+        AppendEnvironmentVariable('GZ_SIM_RESOURCE_PATH', models_path),
+        AppendEnvironmentVariable('GZ_SIM_SYSTEM_PLUGIN_PATH', plugin_path),
+        gz_sim,
     ])
-
-
-# Add boolean commands if true
-def _boolean_command(arg):
-    cmd = ['"--', arg, '" if "true" == "', LaunchConfiguration(arg), '" else ""']
-    py_cmd = PythonExpression(cmd)
-    return py_cmd

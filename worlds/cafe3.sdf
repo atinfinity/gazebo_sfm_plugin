@@ -1,12 +1,22 @@
-<!-- Usage notes are located in this file, look for "Usage"-->
 <?xml version="1.0" ?>
-<sdf version="1.5">
+<!--
+  Cafe world with Social Force Model pedestrians.
+  Ported to Gazebo Harmonic (gz-sim 8) / ROS 2 Jazzy.
+
+  The cafe, cafe_table and ground_plane models are pulled from Gazebo Fuel on
+  first run (requires internet access the first time).
+-->
+<sdf version="1.8">
   <world name="default">
-    <gui>
-      <camera name="user_camera">
-        <pose>0 -18 8.0 0 0.523 1.5707</pose>
-      </camera>
-    </gui>
+
+    <!-- Core simulation systems -->
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+
     <light name="sun" type="directional">
       <cast_shadows>1</cast_shadows>
       <pose>0 0 10 0 -0 0</pose>
@@ -36,56 +46,59 @@
     </light>
 
     <include>
-      <uri>model://ground_plane</uri>
+      <name>ground_plane</name>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Ground Plane</uri>
     </include>
 
     <include>
-      <uri>model://cafe</uri>
+      <name>cafe</name>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Cafe</uri>
     </include>
 
     <include>
       <name>table1</name>
       <pose>0.5 -1.6 0.2 0 0 0</pose>
-      <uri>model://cafe_table</uri>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Cafe table</uri>
     </include>
 
     <include>
       <name>table2</name>
       <pose>2.4 -5.5 0.2 0 0 0</pose>
-      <uri>model://cafe_table</uri>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Cafe table</uri>
     </include>
 
     <include>
       <name>table3</name>
       <pose>-1.5 -5.5 0.2 0 0 0</pose>
-      <uri>model://cafe_table</uri>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Cafe table</uri>
     </include>
 
     <include>
       <name>table4</name>
       <pose>2.4 -9 0.2 0 0 0</pose>
-      <uri>model://cafe_table</uri>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Cafe table</uri>
     </include>
 
     <include>
       <name>table5</name>
       <pose>-1.5 -9 0.2 0 0 0</pose>
-      <uri>model://cafe_table</uri>
+      <uri>https://fuel.gazebosim.org/1.0/OpenRobotics/models/Cafe table</uri>
     </include>
 
     <actor name="actor1">
       <pose>-1 2 1.25 0 0 0</pose>
       <skin>
-        <filename>walk-red.dae</filename>
+        <filename>../models/walk-red.dae</filename>
         <scale>1.0</scale>
       </skin>
       <animation name="walking">
-        <filename>walk-red.dae</filename>
+        <filename>../models/walk-red.dae</filename>
         <scale>1.000000</scale>
         <interpolate_x>true</interpolate_x>
       </animation>
 
-      <plugin name="actor1_plugin" filename="libPedestrianSFMPlugin.so">
+      <plugin name="gazebo_sfm_plugin::PedestrianSFMPlugin"
+              filename="PedestrianSFMPlugin">
         <velocity>0.9</velocity>
         <radius>0.4</radius>
         <animation_factor>5.1</animation_factor>
@@ -93,8 +106,8 @@
         <people_distance>6.0</people_distance>
         <!-- weights -->
         <goal_weight>2.0</goal_weight>
-        <obstacle_weight>80.0</obstacle_weight> <!--10.0-->
-        <social_weight>15</social_weight> <!--2.1-->
+        <obstacle_weight>80.0</obstacle_weight>
+        <social_weight>15</social_weight>
         <group_gaze_weight>3.0</group_gaze_weight>
         <group_coh_weight>2.0</group_coh_weight>
         <group_rep_weight>1.0</group_rep_weight>
@@ -113,16 +126,17 @@
     <actor name="actor2">
       <pose>-1 -8 1.25 0 0 0</pose>
       <skin>
-        <filename>walk-blue.dae</filename> 
+        <filename>../models/walk-blue.dae</filename>
         <scale>1.0</scale>
       </skin>
       <animation name="walking">
-        <filename>walk-blue.dae</filename> 
+        <filename>../models/walk-blue.dae</filename>
         <scale>1.000000</scale>
         <interpolate_x>true</interpolate_x>
       </animation>
 
-      <plugin name="actor2_plugin" filename="libPedestrianSFMPlugin.so">
+      <plugin name="gazebo_sfm_plugin::PedestrianSFMPlugin"
+              filename="PedestrianSFMPlugin">
         <velocity>1.2</velocity>
         <radius>0.4</radius>
         <animation_factor>5.1</animation_factor>
@@ -130,7 +144,7 @@
         <people_distance>6.0</people_distance>
         <goal_weight>2.0</goal_weight>
         <obstacle_weight>80.0</obstacle_weight>
-        <social_weight>15.0</social_weight> 
+        <social_weight>15.0</social_weight>
         <group_gaze_weight>3.0</group_gaze_weight>
         <group_coh_weight>2.0</group_coh_weight>
         <group_rep_weight>1.0</group_rep_weight>
@@ -146,136 +160,38 @@
       </plugin>
     </actor>
 
-	
-
+    <!-- A static actor (no plugin): just stands and is avoided by the others.
+         Pluginless actors are lifted by the animation's root-bone translation
+         (~1.023 for stand.dae), unlike the plugin-driven actors whose
+         TrajectoryPose overrides it. Pose.Z is tuned so the feet rest on the
+         floor (raise this value to lift the actor, lower it to sink). -->
     <actor name="actor3">
-      <pose>-1 0 1.25 0 0 0</pose>
+      <pose>-1 0 0.18 0 0 0</pose>
       <skin>
-        <filename>stand.dae</filename>
+        <filename>../models/stand.dae</filename>
         <scale>1.0</scale>
       </skin>
       <animation name="stand">
-        <filename>stand.dae</filename>
+        <filename>../models/stand.dae</filename>
         <scale>1.000000</scale>
         <interpolate_x>true</interpolate_x>
       </animation>
-      <!--<plugin name="actor3_plugin" filename="libActorPlugin.so">
-        <target>3 2 1.24</target>
-        <target_weight>1.15</target_weight>
-        <obstacle_weight>1.8</obstacle_weight>
-        <animation_factor>5.1</animation_factor>
-        <ignore_obstacles>
-          <model>cafe</model>
-          <model>ground_plane</model>
-        </ignore_obstacles>
-      </plugin>-->
     </actor>
-    
-    
-    <!--<actor name="actor4">
-      <pose>3 0 1.25 0 0 0</pose>
-      <skin>
-        <filename>walk-green.dae</filename> 
-        <scale>1.0</scale>
-      </skin>
-      <animation name="walking">
-        <filename>walk-green.dae</filename>
-        <scale>1.000000</scale>
-        <interpolate_x>true</interpolate_x>
-      </animation>
-
-      <plugin name="actor4_plugin" filename="libPedestrianSFMPlugin.so">
-        <velocity>1.0</velocity>
-        <radius>0.4</radius>
-        <animation_factor>5.1</animation_factor>
-        <people_distance>6.0</people_distance>
-        <goal_weight>2.0</goal_weight>
-        <obstacle_weight>80.0</obstacle_weight>
-        <social_weight>15.0</social_weight> 
-        <group_gaze_weight>3.0</group_gaze_weight>
-        <group_coh_weight>2.0</group_coh_weight>
-        <group_rep_weight>1.0</group_rep_weight>
-        <ignore_obstacles>
-          <model>cafe</model>
-          <model>ground_plane</model>
-        </ignore_obstacles>
-        <trajectory>
-          <cyclic>true</cyclic>
-          <waypoint>3 0 1.25</waypoint>
-          <waypoint>-3 0 1.25</waypoint>
-        </trajectory>
-      </plugin>
-    </actor>-->
-
-
-    <!-- <actor name="actor4">
-      <pose>1 -8 0.1 0 0 3.1416</pose>
-      <skin>
-        <filename>FrankWhiteBlender2/FrankWhiteBlender2.dae</filename> 
-        <scale>1</scale>
-      </skin>
-      <animation name="walkingboy">
-        <filename>walk.dae</filename>
-        <scale>1</scale>
-        <interpolate_x>true</interpolate_x>
-      </animation>
-      <script>
-        <loop>true</loop>
-        <delay_start>8.000000</delay_start>
-        <auto_start>true</auto_start>
-        <trajectory id="0" type="walkingboy">
-          <waypoint>
-            <time>0</time>
-            <pose>1 -8 0.1 0 0 3.1416</pose>
-          </waypoint>
-          <waypoint>
-            <time>8</time>
-            <pose>2 1 0.1 0 0 3.1416</pose>
-          </waypoint>
-          <waypoint>
-            <time>16</time>
-            <pose>1 -8 0.1 0 0 0</pose>
-          </waypoint>
-        </trajectory>
-      </script> 
-
-      <plugin name="actor4_plugin" filename="libPedestrianSFMPlugin.so">
-        <velocity>1.0</velocity>
-        <radius>0.4</radius>
-        <animation_factor>5.1</animation_factor>
-        <people_distance>6.0</people_distance>
-        <goal_weight>2.0</goal_weight>
-        <obstacle_weight>80.0</obstacle_weight>
-        <social_weight>15.0</social_weight> 
-        <group_gaze_weight>3.0</group_gaze_weight>
-        <group_coh_weight>2.0</group_coh_weight>
-        <group_rep_weight>1.0</group_rep_weight>
-        <ignore_obstacles>
-          <model>cafe</model>
-          <model>ground_plane</model>
-        </ignore_obstacles>
-        <trajectory>
-          <cyclic>true</cyclic>
-          <waypoint>1 -8 0.1</waypoint>
-          <waypoint>2 1 0.1</waypoint>
-        </trajectory>
-      </plugin>
-    </actor>-->
-
 
     <actor name="actor4">
       <pose>3 0 1.25 0 0 0</pose>
       <skin>
-        <filename>walk.dae</filename> 
+        <filename>../models/walk.dae</filename>
         <scale>1.0</scale>
       </skin>
       <animation name="walking">
-        <filename>walk.dae</filename>
+        <filename>../models/walk.dae</filename>
         <scale>1.000000</scale>
         <interpolate_x>true</interpolate_x>
       </animation>
 
-      <plugin name="actor4_plugin" filename="libPedestrianSFMPlugin.so">
+      <plugin name="gazebo_sfm_plugin::PedestrianSFMPlugin"
+              filename="PedestrianSFMPlugin">
         <velocity>1.0</velocity>
         <radius>0.4</radius>
         <animation_factor>5.1</animation_factor>
@@ -283,12 +199,12 @@
         <people_distance>6.0</people_distance>
         <goal_weight>2.0</goal_weight>
         <obstacle_weight>80.0</obstacle_weight>
-        <social_weight>15.0</social_weight> 
+        <social_weight>15.0</social_weight>
         <group_gaze_weight>3.0</group_gaze_weight>
         <group_coh_weight>2.0</group_coh_weight>
         <group_rep_weight>1.0</group_rep_weight>
         <group>
-            <model>actor5</model>
+          <model>actor5</model>
         </group>
         <ignore_obstacles>
           <model>cafe</model>
@@ -305,16 +221,17 @@
     <actor name="actor5">
       <pose>3 0.8 1.25 0 0 0</pose>
       <skin>
-        <filename>walk.dae</filename> 
+        <filename>../models/walk.dae</filename>
         <scale>1.0</scale>
       </skin>
       <animation name="walking">
-        <filename>walk.dae</filename>
+        <filename>../models/walk.dae</filename>
         <scale>1.000000</scale>
         <interpolate_x>true</interpolate_x>
       </animation>
 
-      <plugin name="actor5_plugin" filename="libPedestrianSFMPlugin.so">
+      <plugin name="gazebo_sfm_plugin::PedestrianSFMPlugin"
+              filename="PedestrianSFMPlugin">
         <velocity>0.7</velocity>
         <radius>0.4</radius>
         <animation_factor>5.1</animation_factor>
@@ -322,14 +239,14 @@
         <people_distance>6.0</people_distance>
         <goal_weight>2.0</goal_weight>
         <obstacle_weight>80.0</obstacle_weight>
-        <social_weight>15.0</social_weight> 
+        <social_weight>15.0</social_weight>
         <group_gaze_weight>3.0</group_gaze_weight>
         <group_coh_weight>2.0</group_coh_weight>
         <group_rep_weight>1.0</group_rep_weight>
         <group>
-            <model>actor4</model>
+          <model>actor4</model>
         </group>
-        <ignore_obstacles> 
+        <ignore_obstacles>
           <model>cafe</model>
           <model>ground_plane</model>
         </ignore_obstacles>

@@ -16,321 +16,421 @@
 /**                                                                    */
 /** http://www.opensource.org/licenses/BSD-3-Clause                    */
 /**                                                                    */
+/** Ported to Gazebo Harmonic (gz-sim 8) / ROS 2 Jazzy.                */
+/**                                                                    */
 /***********************************************************************/
 
-#include <functional>
-#include <stdio.h>
-#include <string>
-
-//#include <ignition/math.hh>
-//#include <ignition/math/gzmath.hh>
 #include <gazebo_sfm_plugin/PedestrianSFMPlugin.h>
 
-using namespace gazebo;
-GZ_REGISTER_MODEL_PLUGIN(PedestrianSFMPlugin)
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <tuple>
+
+#include <gz/plugin/Register.hh>
+#include <gz/sim/Util.hh>
+#include <gz/sim/components/Actor.hh>
+#include <gz/sim/components/AxisAlignedBox.hh>
+#include <gz/sim/components/Model.hh>
+#include <gz/sim/components/Name.hh>
+#include <gz/sim/components/Pose.hh>
+#include <gz/common/Console.hh>
+#include <gz/math/AxisAlignedBox.hh>
+#include <gz/math/Helpers.hh>
+#include <gz/math/Quaternion.hh>
+
+using namespace gazebo_sfm_plugin;
 
 #define WALKING_ANIMATION "walking"
 
 /////////////////////////////////////////////////
-PedestrianSFMPlugin::PedestrianSFMPlugin() {}
+PedestrianSFMPlugin::PedestrianSFMPlugin() = default;
 
 /////////////////////////////////////////////////
-void PedestrianSFMPlugin::Load(physics::ModelPtr _model, sdf::ElementPtr _sdf) {
+void PedestrianSFMPlugin::Configure(
+    const gz::sim::Entity &_entity,
+    const std::shared_ptr<const sdf::Element> &_sdf,
+    gz::sim::EntityComponentManager &_ecm,
+    gz::sim::EventManager & /*_eventMgr*/)
+{
+  this->actorEntity = _entity;
   this->sdf = _sdf;
-  this->actor = boost::dynamic_pointer_cast<physics::Actor>(_model);
-  this->world = this->actor->GetWorld();
+  this->worldEntity = gz::sim::worldEntity(_ecm);
 
-  this->sfmActor.id = this->actor->GetId();
+  // Verify the plugin is attached to an actor.
+  if (!_ecm.EntityHasComponentType(_entity,
+        gz::sim::components::Actor::typeId))
+  {
+    gzerr << "[PedestrianSFMPlugin] Plugin must be attached to an <actor>; "
+          << "entity [" << _entity << "] is not an actor. Disabling.\n";
+    this->actorEntity = gz::sim::kNullEntity;
+    return;
+  }
 
-  // Initialize sfmActor position
-  ignition::math::Vector3d pos = this->actor->WorldPose().Pos();
-  ignition::math::Vector3d rpy = this->actor->WorldPose().Rot().Euler();
-  this->sfmActor.position.set(pos.X(), pos.Y());
-  this->sfmActor.yaw = utils::Angle::fromRadian(rpy.Z()); // yaw
-  ignition::math::Vector3d linvel = this->actor->WorldLinearVel();
-  this->sfmActor.velocity.set(linvel.X(), linvel.Y());
-  this->sfmActor.linearVelocity = linvel.Length();
-  ignition::math::Vector3d angvel = this->actor->WorldAngularVel();
-  this->sfmActor.angularVelocity = angvel.Z(); // Length()
+  // A mutable clone is required because nested traversal (GetElement) is not
+  // available on a const sdf::Element.
+  sdf::ElementPtr sdfClone = _sdf->Clone();
 
-  // Read in the maximum velocity of the pedestrian
-  if (_sdf->HasElement("velocity"))
-    this->sfmActor.desiredVelocity = _sdf->Get<double>("velocity");
-  else
-    this->sfmActor.desiredVelocity = 0.8;
+  // SFM agent identity.
+  this->sfmActor.id = static_cast<int>(this->actorEntity);
 
-  // Read in the target weight
-  if (_sdf->HasElement("goal_weight"))
-    this->sfmActor.params.forceFactorDesired = _sdf->Get<double>("goal_weight");
-  // Read in the obstacle weight
-  if (_sdf->HasElement("obstacle_weight"))
-    this->sfmActor.params.forceFactorObstacle =
-        _sdf->Get<double>("obstacle_weight");
-  // Read in the social weight
-  if (_sdf->HasElement("social_weight"))
-    this->sfmActor.params.forceFactorSocial =
-        _sdf->Get<double>("social_weight");
-  // Read in the group gaze weight
-  if (_sdf->HasElement("group_gaze_weight"))
-    this->sfmActor.params.forceFactorGroupGaze =
-        _sdf->Get<double>("group_gaze_weight");
-  // Read in the group coherence weight
-  if (_sdf->HasElement("group_coh_weight"))
-    this->sfmActor.params.forceFactorGroupCoherence =
-        _sdf->Get<double>("group_coh_weight");
-  // Read in the group repulsion weight
-  if (_sdf->HasElement("group_rep_weight"))
-    this->sfmActor.params.forceFactorGroupRepulsion =
-        _sdf->Get<double>("group_rep_weight");
+  // Initialize the SFM agent state from the actor's initial world pose.
+  gz::math::Pose3d pose = gz::sim::worldPose(this->actorEntity, _ecm);
+  gz::math::Vector3d rpy = pose.Rot().Euler();
+  this->sfmActor.position.set(pose.Pos().X(), pose.Pos().Y());
+  this->sfmActor.yaw = utils::Angle::fromRadian(rpy.Z());
+  // Actors are kinematic (no physics), so velocity starts at zero and is later
+  // estimated from successive poses.
+  this->sfmActor.velocity.set(0.0, 0.0);
+  this->sfmActor.linearVelocity = 0.0;
+  this->sfmActor.angularVelocity = 0.0;
+  this->lastActorPose = pose;
 
-  // Read in the animation factor (applied in the OnUpdate function).
-  if (_sdf->HasElement("animation_factor"))
-    this->animationFactor = _sdf->Get<double>("animation_factor");
-  else
-    this->animationFactor = 4.5;
+  // Maximum (desired) velocity of the pedestrian.
+  this->sfmActor.desiredVelocity = sdfClone->Get<double>("velocity", 0.8).first;
 
-  if (_sdf->HasElement("animation_name")) {
-    this->animationName = _sdf->Get<std::string>("animation_name");
-  } else
-    this->animationName = WALKING_ANIMATION;
+  // Optional radius (kept faithful to the SFM default when absent).
+  this->sfmActor.radius =
+      sdfClone->Get<double>("radius", this->sfmActor.radius).first;
 
-  if (_sdf->HasElement("people_distance"))
-    this->peopleDistance = _sdf->Get<double>("people_distance");
-  else
-    this->peopleDistance = 5.0;
+  // Social Force Model weights (preserve lightsfm defaults when not given).
+  this->sfmActor.params.forceFactorDesired =
+      sdfClone->Get<double>("goal_weight",
+                            this->sfmActor.params.forceFactorDesired).first;
+  this->sfmActor.params.forceFactorObstacle =
+      sdfClone->Get<double>("obstacle_weight",
+                            this->sfmActor.params.forceFactorObstacle).first;
+  this->sfmActor.params.forceFactorSocial =
+      sdfClone->Get<double>("social_weight",
+                            this->sfmActor.params.forceFactorSocial).first;
+  this->sfmActor.params.forceFactorGroupGaze =
+      sdfClone->Get<double>("group_gaze_weight",
+                            this->sfmActor.params.forceFactorGroupGaze).first;
+  this->sfmActor.params.forceFactorGroupCoherence =
+      sdfClone->Get<double>("group_coh_weight",
+                            this->sfmActor.params.forceFactorGroupCoherence).first;
+  this->sfmActor.params.forceFactorGroupRepulsion =
+      sdfClone->Get<double>("group_rep_weight",
+                            this->sfmActor.params.forceFactorGroupRepulsion).first;
 
-  // Read in the pedestrians in your walking group
-  if (_sdf->HasElement("group")) {
+  // Animation parameters.
+  this->animationFactor = sdfClone->Get<double>("animation_factor", 4.5).first;
+  this->animationName =
+      sdfClone->Get<std::string>("animation_name", WALKING_ANIMATION).first;
+  this->peopleDistance = sdfClone->Get<double>("people_distance", 5.0).first;
+
+  // Pedestrians in this actor's walking group.
+  if (sdfClone->HasElement("group"))
+  {
     this->sfmActor.groupId = this->sfmActor.id;
-    sdf::ElementPtr modelElem = _sdf->GetElement("group")->GetElement("model");
-    while (modelElem) {
+    sdf::ElementPtr modelElem =
+        sdfClone->GetElement("group")->GetElement("model");
+    while (modelElem)
+    {
       this->groupNames.push_back(modelElem->Get<std::string>());
       modelElem = modelElem->GetNextElement("model");
     }
-    this->sfmActor.groupId = this->sfmActor.id;
-  } else
+  }
+  else
+  {
     this->sfmActor.groupId = -1;
+  }
 
-  // Read in the other obstacles to ignore
-  if (_sdf->HasElement("ignore_obstacles")) {
+  // Other obstacles to ignore (by model name).
+  if (sdfClone->HasElement("ignore_obstacles"))
+  {
     sdf::ElementPtr modelElem =
-        _sdf->GetElement("ignore_obstacles")->GetElement("model");
-    while (modelElem) {
+        sdfClone->GetElement("ignore_obstacles")->GetElement("model");
+    while (modelElem)
+    {
       this->ignoreModels.push_back(modelElem->Get<std::string>());
       modelElem = modelElem->GetNextElement("model");
     }
   }
-  // Add our own name to models we should ignore when avoiding obstacles.
-  this->ignoreModels.push_back(this->actor->GetName());
-  // Add the other pedestrians to the ignored obstacles
-  for (unsigned int i = 0; i < this->world->ModelCount(); ++i) {
-    physics::ModelPtr model = this->world->ModelByIndex(i); // GetModel(i);
+  // Always ignore our own model.
+  auto *nameComp = _ecm.Component<gz::sim::components::Name>(this->actorEntity);
+  if (nameComp)
+    this->ignoreModels.push_back(nameComp->Data());
 
-    if (model->GetId() != this->actor->GetId() &&
-        ((int)model->GetType() == (int)this->actor->GetType())) {
-      this->ignoreModels.push_back(model->GetName());
-    }
-  }
+  // Goals / trajectory waypoints.
+  if (sdfClone->HasElement("trajectory"))
+  {
+    sdf::ElementPtr trajElem = sdfClone->GetElement("trajectory");
+    if (trajElem->HasElement("cyclic"))
+      this->sfmActor.cyclicGoals = trajElem->Get<bool>("cyclic", false).first;
 
-  this->connections.push_back(event::Events::ConnectWorldUpdateBegin(
-      std::bind(&PedestrianSFMPlugin::OnUpdate, this, std::placeholders::_1)));
-
-  this->Reset();
-}
-
-/////////////////////////////////////////////////
-void PedestrianSFMPlugin::Reset() {
-  // this->velocity = 0.8;
-  this->lastUpdate = 0;
-
-  // Read in the goals to reach
-  if (this->sdf->HasElement("trajectory")) {
-    sdf::ElementPtr modelElemCyclic =
-        this->sdf->GetElement("trajectory")->GetElement("cyclic");
-
-    if (modelElemCyclic)
-      this->sfmActor.cyclicGoals = modelElemCyclic->Get<bool>();
-
-    sdf::ElementPtr modelElem =
-        this->sdf->GetElement("trajectory")->GetElement("waypoint");
-    while (modelElem) {
-      ignition::math::Vector3d g = modelElem->Get<ignition::math::Vector3d>();
+    sdf::ElementPtr wpElem = trajElem->GetElement("waypoint");
+    while (wpElem)
+    {
+      gz::math::Vector3d g = wpElem->Get<gz::math::Vector3d>();
       sfm::Goal goal;
       goal.center.set(g.X(), g.Y());
       goal.radius = 0.3;
       this->sfmActor.goals.push_back(goal);
-      modelElem = modelElem->GetNextElement("waypoint");
+      wpElem = wpElem->GetNextElement("waypoint");
     }
   }
 
-  auto skelAnims = this->actor->SkeletonAnimations();
-  if (skelAnims.find(this->animationName) == skelAnims.end()) {
-    gzerr << "Skeleton animation " << this->animationName << " not found.\n";
-  } else {
-    // Create custom trajectory
-    this->trajectoryInfo.reset(new physics::TrajectoryInfo());
-    this->trajectoryInfo->type = this->animationName;
-    this->trajectoryInfo->duration = 1.0;
+  // --- Set up the components needed to drive the actor programmatically. ---
+  namespace components = gz::sim::components;
 
-    this->actor->SetCustomTrajectory(this->trajectoryInfo);
+  // Choose which skeleton animation to play.
+  auto *animNameComp =
+      _ecm.Component<components::AnimationName>(this->actorEntity);
+  if (nullptr == animNameComp)
+    _ecm.CreateComponent(this->actorEntity,
+                         components::AnimationName(this->animationName));
+  else
+    *animNameComp = components::AnimationName(this->animationName);
+  _ecm.SetChanged(this->actorEntity, components::AnimationName::typeId,
+                  gz::sim::ComponentState::OneTimeChange);
+
+  // Animation time is advanced by this plugin to coordinate the walk cycle.
+  if (nullptr == _ecm.Component<components::AnimationTime>(this->actorEntity))
+    _ecm.CreateComponent(this->actorEntity, components::AnimationTime());
+
+  // The rendered world pose is composed as Pose * TrajectoryPose. We zero the
+  // base Pose so TrajectoryPose alone defines the actor's full world pose,
+  // matching the Gazebo Classic SetWorldPose() semantics.
+  auto *poseComp = _ecm.Component<components::Pose>(this->actorEntity);
+  if (nullptr == poseComp)
+    _ecm.CreateComponent(this->actorEntity,
+                         components::Pose(gz::math::Pose3d::Zero));
+  else
+    *poseComp = components::Pose(gz::math::Pose3d::Zero);
+
+  // Initial trajectory pose. The DAE skins are authored Z-up (upright) and face
+  // their heading at yaw=0, so neither the roll nor the yaw offset that Gazebo
+  // Classic required are needed in gz-sim.
+  gz::math::Pose3d initTraj(
+      pose.Pos().X(), pose.Pos().Y(), 1.20,
+      0.0, 0.0, this->sfmActor.yaw.toRadian());
+  if (nullptr == _ecm.Component<components::TrajectoryPose>(this->actorEntity))
+    _ecm.CreateComponent(this->actorEntity,
+                         components::TrajectoryPose(initTraj));
+  else
+    *_ecm.Component<components::TrajectoryPose>(this->actorEntity) =
+        components::TrajectoryPose(initTraj);
+  _ecm.SetChanged(this->actorEntity, components::TrajectoryPose::typeId,
+                  gz::sim::ComponentState::OneTimeChange);
+  this->lastActorPose = initTraj;
+
+  gzmsg << "[PedestrianSFMPlugin] configured actor entity [" << _entity
+        << "] with " << this->sfmActor.goals.size() << " goal(s).\n";
+}
+
+/////////////////////////////////////////////////
+void PedestrianSFMPlugin::PreUpdate(
+    const gz::sim::UpdateInfo &_info,
+    gz::sim::EntityComponentManager &_ecm)
+{
+  if (this->actorEntity == gz::sim::kNullEntity || _info.paused)
+    return;
+
+  namespace components = gz::sim::components;
+
+  // Time delta (seconds).
+  std::chrono::duration<double> dtDur = _info.simTime - this->lastUpdate;
+  double dt = dtDur.count();
+  this->lastUpdate = _info.simTime;
+  if (dt <= 0.0)
+    return;
+  this->currentDt = dt;
+
+  auto *trajPoseComp =
+      _ecm.Component<components::TrajectoryPose>(this->actorEntity);
+  if (nullptr == trajPoseComp)
+    return;
+  gz::math::Pose3d actorPose = trajPoseComp->Data();
+
+  // Update the SFM agent's perception of the world.
+  this->HandleObstacles(_ecm);
+  this->HandlePedestrians(_ecm);
+
+  // Compute social forces and integrate the agent's motion.
+  sfm::SFM.computeForces(this->sfmActor, this->otherActors);
+  sfm::SFM.updatePosition(this->sfmActor, dt);
+
+  // Desired heading: the SFM yaw, with rotate-in-place smoothing as in the
+  // original plugin. (gz-sim needs no model-orientation offset.)
+  utils::Angle h = this->sfmActor.yaw;
+  double yaw = h.toRadian();
+  gz::math::Vector3d rpy = actorPose.Rot().Euler();
+  utils::Angle current = utils::Angle::fromRadian(rpy.Z());
+  double diff = (h - current).toRadian();
+  if (std::fabs(diff) > GZ_DTOR(10))
+  {
+    current = current + utils::Angle::fromRadian(diff * 0.005);
+    yaw = current.toRadian();
+  }
+
+  gz::math::Pose3d newPose;
+  newPose.Pos().X(this->sfmActor.position.getX());
+  newPose.Pos().Y(this->sfmActor.position.getY());
+  newPose.Pos().Z(1.20);
+  newPose.Rot() = gz::math::Quaterniond(0.0, 0.0, yaw);
+
+  // Distance traveled coordinates translational motion with the walk cycle.
+  double distanceTraveled = (newPose.Pos() - actorPose.Pos()).Length();
+
+  // Write the new actor root pose.
+  *trajPoseComp = components::TrajectoryPose(newPose);
+  _ecm.SetChanged(this->actorEntity, components::TrajectoryPose::typeId,
+                  gz::sim::ComponentState::OneTimeChange);
+  this->lastActorPose = newPose;
+
+  // Advance the skeleton animation proportionally to distance traveled.
+  auto *animTimeComp =
+      _ecm.Component<components::AnimationTime>(this->actorEntity);
+  if (nullptr != animTimeComp)
+  {
+    auto animTime = animTimeComp->Data() +
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(
+                distanceTraveled * this->animationFactor));
+    *animTimeComp = components::AnimationTime(animTime);
+    _ecm.SetChanged(this->actorEntity, components::AnimationTime::typeId,
+                    gz::sim::ComponentState::OneTimeChange);
   }
 }
 
 /////////////////////////////////////////////////
-void PedestrianSFMPlugin::HandleObstacles() {
+void PedestrianSFMPlugin::HandleObstacles(
+    gz::sim::EntityComponentManager &_ecm)
+{
+  namespace components = gz::sim::components;
+
   double minDist = 10000.0;
-  ignition::math::Vector3d closest_obs;
-  ignition::math::Vector3d closest_obs2;
+  gz::math::Vector3d closestObs;
   this->sfmActor.obstacles1.clear();
 
-  for (unsigned int i = 0; i < this->world->ModelCount(); ++i) {
-    physics::ModelPtr model = this->world->ModelByIndex(i); // GetModel(i);
-    if (std::find(this->ignoreModels.begin(), this->ignoreModels.end(),
-                  model->GetName()) == this->ignoreModels.end()) {
-      ignition::math::Vector3d actorPos = this->actor->WorldPose().Pos();
-      ignition::math::Vector3d modelPos = model->WorldPose().Pos();
-      std::tuple<bool, double, ignition::math::Vector3d> intersect =
-          model->BoundingBox().Intersect(modelPos, actorPos, 0.05, 8.0);
+  const gz::math::Vector3d actorPos(this->sfmActor.position.getX(),
+                                    this->sfmActor.position.getY(), 1.2138);
 
-      if (std::get<0>(intersect) == true) {
+  _ecm.Each<components::Model, components::Name>(
+      [&](const gz::sim::Entity &_ent,
+          const components::Model *,
+          const components::Name *_name) -> bool
+      {
+        // Other pedestrians are handled separately, not as static obstacles.
+        if (_ecm.EntityHasComponentType(_ent, components::Actor::typeId))
+          return true;
+        // Explicitly ignored models (and our own model).
+        if (std::find(this->ignoreModels.begin(), this->ignoreModels.end(),
+                      _name->Data()) != this->ignoreModels.end())
+          return true;
 
-        // ignition::math::Vector3d = model->BoundingBox().Center();
-        // double approximated_radius = std::max(model->BoundingBox().XLength(),
-        //                                      model->BoundingBox().YLength());
-
-        // ignition::math::Vector3d offset1 = modelPos - actorPos;
-        // double modelDist1 = offset1.Length();
-        // double dist1 = actorPos.Distance(modelPos);
-
-        ignition::math::Vector3d offset = std::get<2>(intersect) - actorPos;
-        double modelDist = offset.Length(); // - approximated_radius;
-        // double dist2 = actorPos.Distance(std::get<2>(intersect));
-
-        if (modelDist < minDist) {
-          minDist = modelDist;
-          // closest_obs = offset;
-          closest_obs = std::get<2>(intersect);
+        // The world-frame AABB is populated by the physics system, but only
+        // for models that carry the component. Request it lazily; the value
+        // becomes available on a subsequent update.
+        auto *bboxComp = _ecm.Component<components::AxisAlignedBox>(_ent);
+        if (nullptr == bboxComp)
+        {
+          _ecm.CreateComponent(_ent, components::AxisAlignedBox());
+          return true;
         }
-      }
-    }
-  }
 
-  // printf("Actor %s x: %.2f y: %.2f\n", this->actor->GetName().c_str(),
-  //        this->actor->WorldPose().Pos().X(),
-  //        this->actor->WorldPose().Pos().Y());
-  // printf("Model offset x: %.2f y: %.2f\n", closest_obs.X(), closest_obs.Y());
-  // printf("Model intersec x: %.2f y: %.2f\n\n", closest_obs2.X(),
-  //        closest_obs2.Y());
-  if (minDist <= 10.0) {
-    utils::Vector2d ob(closest_obs.X(), closest_obs.Y());
+        gz::math::AxisAlignedBox box = bboxComp->Data();
+        if (box == gz::math::AxisAlignedBox())  // not populated yet
+          return true;
+
+        gz::math::Vector3d modelPos = gz::sim::worldPose(_ent, _ecm).Pos();
+        std::tuple<bool, double, gz::math::Vector3d> intersect =
+            box.Intersect(modelPos, actorPos, 0.05, 8.0);
+
+        if (std::get<0>(intersect))
+        {
+          gz::math::Vector3d offset = std::get<2>(intersect) - actorPos;
+          double modelDist = offset.Length();
+          if (modelDist < minDist)
+          {
+            minDist = modelDist;
+            closestObs = std::get<2>(intersect);
+          }
+        }
+        return true;
+      });
+
+  if (minDist <= 10.0)
+  {
+    utils::Vector2d ob(closestObs.X(), closestObs.Y());
     this->sfmActor.obstacles1.push_back(ob);
   }
 }
 
 /////////////////////////////////////////////////
-void PedestrianSFMPlugin::HandlePedestrians() {
+void PedestrianSFMPlugin::HandlePedestrians(
+    gz::sim::EntityComponentManager &_ecm)
+{
+  namespace components = gz::sim::components;
+
   this->otherActors.clear();
 
-  for (unsigned int i = 0; i < this->world->ModelCount(); ++i) {
-    physics::ModelPtr model = this->world->ModelByIndex(i); // GetModel(i);
+  const gz::math::Vector3d selfPos(this->sfmActor.position.getX(),
+                                   this->sfmActor.position.getY(), 0.0);
 
-    if (model->GetId() != this->actor->GetId() &&
-        ((int)model->GetType() == (int)this->actor->GetType())) {
-      // printf("Actor %i has detected actor %i!\n", this->actor->GetId(),
-      //        model->GetId());
+  // Every actor in the world is a potential pedestrian.
+  _ecm.Each<components::Actor, components::Name>(
+      [&](const gz::sim::Entity &_ent,
+          const components::Actor *,
+          const components::Name *_name) -> bool
+      {
+        if (_ent == this->actorEntity)
+          return true;
 
-      ignition::math::Pose3d modelPose = model->WorldPose();
-      ignition::math::Vector3d pos =
-          modelPose.Pos() - this->actor->WorldPose().Pos();
-      if (pos.Length() < this->peopleDistance) {
+        // Other actors are driven kinematically via their TrajectoryPose;
+        // their base Pose is zeroed, so read the trajectory pose for the
+        // real world pose (falling back to the Pose for scripted actors).
+        gz::math::Pose3d otherPose;
+        auto *tp = _ecm.Component<components::TrajectoryPose>(_ent);
+        if (nullptr != tp)
+          otherPose = tp->Data();
+        else
+          otherPose = gz::sim::worldPose(_ent, _ecm);
+
+        const gz::math::Vector3d otherPos(otherPose.Pos().X(),
+                                          otherPose.Pos().Y(), 0.0);
+
+        // Estimate velocity from the previous planar position.
+        gz::math::Vector3d vel(0.0, 0.0, 0.0);
+        auto prevIt = this->prevPedPos.find(_ent);
+        if (prevIt != this->prevPedPos.end() && this->currentDt > 0.0)
+          vel = (otherPos - prevIt->second) / this->currentDt;
+        this->prevPedPos[_ent] = otherPos;
+
+        if ((otherPos - selfPos).Length() >= this->peopleDistance)
+          return true;
+
         sfm::Agent ped;
-        ped.id = model->GetId();
-        ped.position.set(modelPose.Pos().X(), modelPose.Pos().Y());
-        ignition::math::Vector3d rpy = modelPose.Rot().Euler();
+        ped.id = static_cast<int>(_ent);
+        ped.position.set(otherPos.X(), otherPos.Y());
+        gz::math::Vector3d rpy = otherPose.Rot().Euler();
         ped.yaw = utils::Angle::fromRadian(rpy.Z());
-
         ped.radius = this->sfmActor.radius;
-        ignition::math::Vector3d linvel = model->WorldLinearVel();
-        ped.velocity.set(linvel.X(), linvel.Y());
-        ped.linearVelocity = linvel.Length();
-        ignition::math::Vector3d angvel = model->WorldAngularVel();
-        ped.angularVelocity = angvel.Z(); // Length()
+        ped.velocity.set(vel.X(), vel.Y());
+        ped.linearVelocity = vel.Length();
+        ped.angularVelocity = 0.0;
 
-        // check if the ped belongs to my group
-        if (this->sfmActor.groupId != -1) {
-          std::vector<std::string>::iterator it;
-          it = find(groupNames.begin(), groupNames.end(), model->GetName());
-          if (it != groupNames.end())
-            ped.groupId = this->sfmActor.groupId;
-          else
-            ped.groupId = -1;
+        // Group membership.
+        if (this->sfmActor.groupId != -1)
+        {
+          auto it = std::find(this->groupNames.begin(),
+                              this->groupNames.end(), _name->Data());
+          ped.groupId = (it != this->groupNames.end())
+                            ? this->sfmActor.groupId
+                            : -1;
         }
+
         this->otherActors.push_back(ped);
-      }
-    }
-  }
-  // printf("Actor %s has detected %i actors!\n",
-  // this->actor->GetName().c_str(),
-  //        (int)this->otherActors.size());
+        return true;
+      });
 }
 
 /////////////////////////////////////////////////
-void PedestrianSFMPlugin::OnUpdate(const common::UpdateInfo &_info) {
-  // Time delta
-  double dt = (_info.simTime - this->lastUpdate).Double();
+GZ_ADD_PLUGIN(PedestrianSFMPlugin,
+              gz::sim::System,
+              PedestrianSFMPlugin::ISystemConfigure,
+              PedestrianSFMPlugin::ISystemPreUpdate)
 
-  ignition::math::Pose3d actorPose = this->actor->WorldPose();
-
-  // update closest obstacle
-  HandleObstacles();
-
-  // update pedestrian around
-  HandlePedestrians();
-
-  // Compute Social Forces
-  sfm::SFM.computeForces(this->sfmActor, this->otherActors);
-
-  // Update model
-  sfm::SFM.updatePosition(this->sfmActor, dt);
-
-  utils::Angle h = this->sfmActor.yaw;
-  utils::Angle add = utils::Angle::fromRadian(1.5707);
-  h = h + add;
-  double yaw = h.toRadian();
-  // double yaw = this->sfmActor.yaw.toRadian();
-  // Rotate in place, instead of jumping.
-  // if (std::abs(yaw.Radian()) > IGN_DTOR(10))
-  //{
-  //  ActorPose.Rot() = ignition::math::Quaterniond(1.5707, 0, rpy.Z()+
-  //      yaw.Radian()*0.001);
-  //}
-  // else
-  //{
-  ignition::math::Vector3d rpy = actorPose.Rot().Euler();
-  utils::Angle current = utils::Angle::fromRadian(rpy.Z());
-  double diff = (h - current).toRadian();
-  if (std::fabs(diff) > IGN_DTOR(10)) {
-    current = current + utils::Angle::fromRadian(diff * 0.005);
-    yaw = current.toRadian();
-  }
-  actorPose.Pos().X(this->sfmActor.position.getX());
-  actorPose.Pos().Y(this->sfmActor.position.getY());
-  actorPose.Rot() =
-      ignition::math::Quaterniond(1.5707, 0, yaw); // rpy.Z()+yaw.Radian());
-  //}
-
-  // Make sure the actor stays within bounds
-  // actorPose.Pos().X(std::max(-3.0, std::min(3.5, actorPose.Pos().X())));
-  // actorPose.Pos().Y(std::max(-10.0, std::min(2.0, actorPose.Pos().Y())));
-  actorPose.Pos().Z(1.2138);
-
-  // Distance traveled is used to coordinate motion with the walking
-  // animation
-  double distanceTraveled =
-      (actorPose.Pos() - this->actor->WorldPose().Pos()).Length();
-
-  this->actor->SetWorldPose(actorPose, false, false);
-  this->actor->SetScriptTime(this->actor->ScriptTime() +
-                             (distanceTraveled * this->animationFactor));
-  this->lastUpdate = _info.simTime;
-}
+GZ_ADD_PLUGIN_ALIAS(PedestrianSFMPlugin,
+                    "gazebo_sfm_plugin::PedestrianSFMPlugin")

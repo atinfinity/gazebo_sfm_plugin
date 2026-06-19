@@ -16,54 +16,67 @@
 /**                                                                    */
 /** http://www.opensource.org/licenses/BSD-3-Clause                    */
 /**                                                                    */
+/** Ported to Gazebo Harmonic (gz-sim 8) / ROS 2 Jazzy.                */
+/**                                                                    */
 /***********************************************************************/
 
-#ifndef GAZEBO_PLUGINS_PEDESTRIANSFMPLUGIN_HH_
-#define GAZEBO_PLUGINS_PEDESTRIANSFMPLUGIN_HH_
+#ifndef GAZEBO_SFM_PLUGIN_PEDESTRIANSFMPLUGIN_HH_
+#define GAZEBO_SFM_PLUGIN_PEDESTRIANSFMPLUGIN_HH_
 
 // C++
-#include <algorithm>
+#include <chrono>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
-// Gazebo
-#include "gazebo/common/Plugin.hh"
-#include "gazebo/physics/physics.hh"
-#include "gazebo/util/system.hh"
+// Gazebo (gz-sim 8 / Harmonic)
+#include <gz/sim/System.hh>
+#include <gz/sim/Entity.hh>
+#include <gz/sim/EntityComponentManager.hh>
+#include <gz/sim/EventManager.hh>
+#include <gz/math/Pose3.hh>
+#include <gz/math/Vector3.hh>
 
 // Social Force Model
 #include <lightsfm/sfm.hpp>
 
-namespace gazebo {
-class GZ_PLUGIN_VISIBLE PedestrianSFMPlugin : public ModelPlugin {
+namespace gazebo_sfm_plugin
+{
+/// \brief A gz-sim System that drives a Gazebo actor using the
+/// Social Force Model (lightsfm). Replaces the Gazebo Classic ModelPlugin.
+class PedestrianSFMPlugin
+    : public gz::sim::System,
+      public gz::sim::ISystemConfigure,
+      public gz::sim::ISystemPreUpdate
+{
   /// \brief Constructor
 public:
   PedestrianSFMPlugin();
 
-  /// \brief Load the actor plugin.
-  /// \param[in] _model Pointer to the parent model.
-  /// \param[in] _sdf Pointer to the plugin's SDF elements.
+  /// \brief Destructor
 public:
-  virtual void Load(physics::ModelPtr _model, sdf::ElementPtr _sdf);
+  ~PedestrianSFMPlugin() override = default;
 
-  // Documentation Inherited.
+  // Documentation inherited (ISystemConfigure).
 public:
-  virtual void Reset();
+  void Configure(const gz::sim::Entity &_entity,
+                 const std::shared_ptr<const sdf::Element> &_sdf,
+                 gz::sim::EntityComponentManager &_ecm,
+                 gz::sim::EventManager &_eventMgr) override;
 
-  /// \brief Function that is called every update cycle.
-  /// \param[in] _info Timing information
+  // Documentation inherited (ISystemPreUpdate).
+public:
+  void PreUpdate(const gz::sim::UpdateInfo &_info,
+                 gz::sim::EntityComponentManager &_ecm) override;
+
+  /// \brief Helper to detect the closest obstacle (fills sfmActor.obstacles1).
 private:
-  void OnUpdate(const common::UpdateInfo &_info);
+  void HandleObstacles(gz::sim::EntityComponentManager &_ecm);
 
-  // private: void InitializePedestrians();
-
-  /// \brief Helper function to detect the closest obstacles.
+  /// \brief Helper to detect nearby pedestrians (other actors).
 private:
-  void HandleObstacles();
-
-  /// \brief Helper function to detect the nearby pedestrians (other actors).
-private:
-  void HandlePedestrians();
+  void HandlePedestrians(gz::sim::EntityComponentManager &_ecm);
 
   //-------------------------------------------------
 
@@ -81,48 +94,58 @@ private:
 
   /// \brief Maximum distance to detect nearby pedestrians.
 private:
-  double peopleDistance;
+  double peopleDistance = 5.0;
 
-  /// \brief Pointer to the parent actor.
+  /// \brief Entity of the actor this system is attached to.
 private:
-  physics::ActorPtr actor;
+  gz::sim::Entity actorEntity{gz::sim::kNullEntity};
 
-  /// \brief Pointer to the world, for convenience.
+  /// \brief Entity of the world.
 private:
-  physics::WorldPtr world;
+  gz::sim::Entity worldEntity{gz::sim::kNullEntity};
 
-  /// \brief Pointer to the sdf element.
+  /// \brief Copy of the plugin SDF element (for deferred parsing).
 private:
-  sdf::ElementPtr sdf;
-
-  /// \brief Velocity of the actor
-private:
-  ignition::math::Vector3d velocity;
-
-  /// \brief List of connections
-private:
-  std::vector<event::ConnectionPtr> connections;
+  std::shared_ptr<const sdf::Element> sdf;
 
   /// \brief Time scaling factor. Used to coordinate translational motion
   /// with the actor's walking animation.
 private:
   double animationFactor = 1.0;
 
-  /// \brief Time of the last update.
+  /// \brief Time of the last update (sim time).
 private:
-  common::Time lastUpdate;
+  std::chrono::steady_clock::duration lastUpdate{0};
 
-  /// \brief List of models to ignore. Used for vector field
+  /// \brief Accumulated animation/script time for the skeleton animation.
+private:
+  std::chrono::steady_clock::duration animationTime{0};
+
+  /// \brief Last world pose written for the actor (for velocity estimation).
+private:
+  gz::math::Pose3d lastActorPose;
+
+  /// \brief Time delta of the current update step (seconds).
+private:
+  double currentDt = 0.0;
+
+  /// \brief Last known planar position of each other pedestrian, used to
+  /// estimate their velocity (actors are kinematic and expose no velocity).
+private:
+  std::unordered_map<gz::sim::Entity, gz::math::Vector3d> prevPedPos;
+
+  /// \brief Whether the actor pose/animation has been initialized.
+private:
+  bool initialized = false;
+
+  /// \brief List of model names to ignore for obstacle avoidance.
 private:
   std::vector<std::string> ignoreModels;
 
-  /// \brief Animation name of this actor
+  /// \brief Animation name of this actor.
 private:
   std::string animationName;
-
-  /// \brief Custom trajectory info.
-private:
-  physics::TrajectoryInfoPtr trajectoryInfo;
 };
-} // namespace gazebo
-#endif
+}  // namespace gazebo_sfm_plugin
+
+#endif  // GAZEBO_SFM_PLUGIN_PEDESTRIANSFMPLUGIN_HH_
